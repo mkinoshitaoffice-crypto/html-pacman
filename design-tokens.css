@@ -1,0 +1,128 @@
+:root {
+
+  /* ==========================================
+     COLOR SYSTEM
+  ========================================== */
+
+  --color-bg-primary: #FBF7F2;
+  --color-bg-secondary: #FDFBF8;
+  --color-surface: #FFFFFF;
+
+  --color-primary: #F1AAA0;
+  --color-primary-hover: #E89A90;
+  --color-primary-active: #DD8C82;
+
+  --color-secondary: #BFDCD3;
+  --color-secondary-hover: #AFCFC5;
+  --color-secondary-active: #9EC3B8;
+
+  --color-accent: #F7E7A8;
+  --color-accent-dark: #E8D78F;
+
+  --color-success: #BFDCD3;
+  --color-warning: #F7E7A8;
+  --color-danger: #E8A5A5;
+
+  --color-text-primary: #5A6560;
+  --color-text-secondary: #7A8680;
+  --color-text-muted: #A5AEA9;
+  --color-text-inverse: #FFFFFF;
+
+  --color-border: #DDE7E2;
+  --color-border-strong: #C8D4CF;
+
+  --color-disabled-bg: #EAEAEA;
+  --color-disabled-text: #A8A8A8;
+
+  /* ==========================================
+     TYPOGRAPHY
+  ========================================== */
+
+  --font-family:
+    "M PLUS Rounded 1c",
+    "Zen Maru Gothic",
+    "Nunito",
+    sans-serif;
+
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 20px;
+  --font-size-xl: 24px;
+  --font-size-xxl: 32px;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.8;
+
+  /* ==========================================
+     SPACING SYSTEM
+  ========================================== */
+
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+
+  /* ==========================================
+     BORDER RADIUS
+  ========================================== */
+
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  /* ==========================================
+     SHADOWS
+  ========================================== */
+
+  --shadow-card:
+    0 2px 8px rgba(0,0,0,0.08);
+
+  --shadow-button:
+    0 3px 10px rgba(0,0,0,0.10);
+
+  --shadow-modal:
+    0 8px 24px rgba(0,0,0,0.12);
+
+  /* ==========================================
+     BUTTON SIZE
+  ========================================== */
+
+  --button-height-sm: 40px;
+  --button-height-md: 48px;
+  --button-height-lg: 56px;
+
+  /* ==========================================
+     CARD
+  ========================================== */
+
+  --card-padding: 16px;
+  --card-gap: 16px;
+  --card-radius: 16px;
+
+  /* ==========================================
+     ANIMATION
+  ========================================== */
+
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
+  --duration-slow: 0.40s;
+
+  --ease-soft: cubic-bezier(
+    0.4,
+    0,
+    0.2,
+    1
+  );
+
+}
