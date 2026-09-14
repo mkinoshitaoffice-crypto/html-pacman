@@ -22,7 +22,10 @@
         <span class="stat__label">スコア</span>
         <span class="stat__value" id="score">0</span>
       </div>
-      <div class="stage-badge" id="stageBadge">ステージ 1</div>
+      <div class="hud__center">
+        <div class="stage-badge" id="stageBadge">ステージ 1</div>
+        <span class="diff-label" id="diffLabel">ふつう</span>
+      </div>
       <div class="stat stat--right">
         <span class="stat__label">ハイスコア</span>
         <span class="stat__value" id="highScore">0</span>
@@ -52,6 +55,15 @@
           <div class="panel__score" id="panelScore" hidden>
             <span class="panel__score-label">スコア</span>
             <strong id="panelScoreValue">0</strong>
+          </div>
+          <div class="seg" id="diffSeg" role="radiogroup" aria-label="むずかしさ" hidden>
+            <span class="seg__label">むずかしさ</span>
+            <div class="seg__row">
+              <button class="seg__btn" type="button" role="radio" data-diff="easy"   aria-checked="false">やさしい</button>
+              <button class="seg__btn" type="button" role="radio" data-diff="normal" aria-checked="true">ふつう</button>
+              <button class="seg__btn" type="button" role="radio" data-diff="hard"   aria-checked="false">むずかしい</button>
+            </div>
+            <p class="seg__note" id="diffNote"></p>
           </div>
           <button class="btn btn--primary" id="primaryBtn" type="button">はじめる</button>
           <p class="panel__hint" id="panelHint">やじるしキー / WASD でうごく・Pでポーズ</p>

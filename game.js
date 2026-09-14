@@ -96,6 +96,15 @@ function tileType(x, y) {
 
 const isOpen = (x, y) => tileType(x, y) === T.PATH;
 
+// ぶらぶら歩き (のんびり・気まぐれ) の目的地候補
+const OPEN_TILES = [];
+for (let y = 0; y < ROWS; y++) {
+  for (let x = 0; x < COLS; x++) {
+    if (grid[y][x] === T.PATH) OPEN_TILES.push({ x, y });
+  }
+}
+const randomTile = () => OPEN_TILES[(Math.random() * OPEN_TILES.length) | 0];
+
 /* =========================================================================
    2. 画像の読み込み
    ========================================================================= */
@@ -158,26 +167,56 @@ const FRUITS = [
   { img: 'item-daifuku', pts: 5000, label: 'だいふく' },
 ];
 
+/* ---------- むずかしさ ---------- */
+
+const DIFFICULTY = {
+  easy: {
+    label: 'やさしい', chasers: 3, ghost: 0.74, pac: 1.06,
+    fright: 1.8, frightMin: 6, confuse: 7.0, lives: 5,
+    release: 2.0, idle: 8, elroy: 0, scatter: 1.6,
+  },
+  normal: {
+    label: 'ふつう', chasers: 4, ghost: 0.88, pac: 1.02,
+    fright: 1.3, frightMin: 4, confuse: 5.0, lives: 4,
+    release: 1.5, idle: 6, elroy: 0.5, scatter: 1.25,
+  },
+  hard: {
+    label: 'むずかしい', chasers: 4, ghost: 1.00, pac: 1.00,
+    fright: 1.0, frightMin: 0, confuse: 3.5, lives: 3,
+    release: 1.0, idle: 4, elroy: 1, scatter: 1.0,
+  },
+};
+
+let difficulty = 'normal';
+const D = () => DIFFICULTY[difficulty];
+
 function levelSpec(L) {
+  const d = D();
+  const baseFright = FRIGHT_TIME[Math.min(L - 1, FRIGHT_TIME.length - 1)];
   return {
-    pac:        L === 1 ? 0.80 : L < 5 ? 0.90 : L < 21 ? 1.00 : 0.90,
-    pacFright:  L === 1 ? 0.90 : L < 5 ? 0.95 : 1.00,
-    ghost:      L === 1 ? 0.75 : L < 5 ? 0.85 : 0.95,
-    ghostFright:L === 1 ? 0.50 : L < 5 ? 0.55 : 0.60,
-    tunnel:     L === 1 ? 0.40 : L < 5 ? 0.45 : 0.50,
-    fright:     FRIGHT_TIME[Math.min(L - 1, FRIGHT_TIME.length - 1)],
+    pac:        (L === 1 ? 0.80 : L < 5 ? 0.90 : L < 21 ? 1.00 : 0.90) * d.pac,
+    pacFright:  (L === 1 ? 0.90 : L < 5 ? 0.95 : 1.00) * d.pac,
+    ghost:      (L === 1 ? 0.75 : L < 5 ? 0.85 : 0.95) * d.ghost,
+    ghostFright:(L === 1 ? 0.50 : L < 5 ? 0.55 : 0.60) * d.ghost,
+    tunnel:     (L === 1 ? 0.40 : L < 5 ? 0.45 : 0.50) * d.ghost,
+    fright:     Math.max(baseFright * d.fright, d.frightMin),
+    confuse:    d.confuse,
     fruit:      FRUITS[Math.min(L - 1, FRUITS.length - 1)],
   };
 }
 
 // スキャッター / チェイスの切り替えスケジュール (秒)
+// やさしいほど「散らばる」時間が長く、「追う」時間が短くなる
 function schedule(L) {
-  if (L === 1) return [[7, 'scatter'], [20, 'chase'], [7, 'scatter'], [20, 'chase'],
-                       [5, 'scatter'], [20, 'chase'], [5, 'scatter'], [Infinity, 'chase']];
-  if (L < 5)   return [[7, 'scatter'], [20, 'chase'], [7, 'scatter'], [20, 'chase'],
-                       [5, 'scatter'], [1033, 'chase'], [0.02, 'scatter'], [Infinity, 'chase']];
-  return [[5, 'scatter'], [20, 'chase'], [5, 'scatter'], [20, 'chase'],
-          [5, 'scatter'], [1037, 'chase'], [0.02, 'scatter'], [Infinity, 'chase']];
+  const s = D().scatter;
+  const raw =
+    L === 1 ? [[7, 'scatter'], [20, 'chase'], [7, 'scatter'], [20, 'chase'],
+               [5, 'scatter'], [20, 'chase'], [5, 'scatter'], [Infinity, 'chase']]
+  : L < 5   ? [[7, 'scatter'], [20, 'chase'], [7, 'scatter'], [20, 'chase'],
+               [5, 'scatter'], [1033, 'chase'], [0.02, 'scatter'], [Infinity, 'chase']]
+            : [[5, 'scatter'], [20, 'chase'], [5, 'scatter'], [20, 'chase'],
+               [5, 'scatter'], [1037, 'chase'], [0.02, 'scatter'], [Infinity, 'chase']];
+  return raw.map(([dur, m]) => [m === 'scatter' ? dur * s : dur / s, m]);
 }
 
 /* =========================================================================
@@ -358,36 +397,53 @@ function resetPac() {
 
 /* ---------- おばけ ---------- */
 
-function makeGhost(id, name, img, scatter, releaseDots, homeX) {
+// brain: speed  … 足の速さ (もこを 1.00 とした比)
+//        whim   … 分かれ道でとつぜん気が変わる確率
+//        chaseP … 気分が切り替わるとき「追う気」になる確率
+//        span   … 気分がつづく秒数の範囲
+function makeGhost(id, name, img, scatter, releaseDots, homeX, brain) {
   return {
     id, name, img, scatter, releaseDots, baseRelease: releaseDots, homeX,
+    speed: brain.speed, whim: brain.whim, chaseP: brain.chaseP, span: brain.span,
     from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, prog: 0, stopped: true,
     dir: DIRS.left, x: 0, y: 0,
     state: 'home',        // home | exit | graph | enter
-    fright: false, eaten: false,
+    fright: false, eaten: false, inPlay: true,
+    chasing: true, mood: 0, roam: { x: 13, y: 11 },
     path: [], wait: 0, bob: Math.random() * 6,
     onArrive() { ghostDecide(this); },
   };
 }
 
 const ghosts = [
-  makeGhost('moko',   'もこ',   'chaser-moko',   { x: 25, y: 0 },  -1, 13.5),
-  makeGhost('mimiko', 'みみこ', 'chaser-mimiko', { x: 2,  y: 0 },   0, 13.5),
-  makeGhost('pote',   'ぽて',   'chaser-pote',   { x: 27, y: 30 }, 30, 11.5),
-  makeGhost('kuron',  'くろん', 'chaser-kuron',  { x: 0,  y: 30 }, 60, 15.5),
+  // もこ: まっすぐおいかける。いちばん速く、よそ見をしない
+  makeGhost('moko',   'もこ',   'chaser-moko',   { x: 25, y: 0 },  -1, 13.5,
+    { speed: 1.00, whim: 0.00, chaseP: 1.00, span: [9, 9] }),
+  // みみこ: ゆっくり先回りする。足は遅いが 4 マス先に回りこむ
+  makeGhost('mimiko', 'みみこ', 'chaser-mimiko', { x: 2,  y: 0 },   0, 13.5,
+    { speed: 0.80, whim: 0.00, chaseP: 1.00, span: [9, 9] }),
+  // ぽて: のんびり歩く。とても遅く、たいていはぶらぶらしている
+  makeGhost('pote',   'ぽて',   'chaser-pote',   { x: 27, y: 30 }, 30, 11.5,
+    { speed: 0.64, whim: 0.22, chaseP: 0.35, span: [4, 7] }),
+  // くろん: 気まぐれに動く。分かれ道でよく気が変わる
+  makeGhost('kuron',  'くろん', 'chaser-kuron',  { x: 0,  y: 30 }, 60, 15.5,
+    { speed: 0.92, whim: 0.55, chaseP: 0.50, span: [1.5, 3.5] }),
 ];
 
-const moko = ghosts[0];
-
 function resetGhosts() {
+  const d = D();
   ghosts.forEach((g, i) => {
     g.fright = false;
     g.eaten = false;
     g.path = [];
     g.wait = 0;
     g.bob = i * 1.7;
-    g.releaseDots = g.baseRelease;
-    if (g.releaseDots < 0) {
+    g.chasing = true;
+    g.mood = 0;
+    g.roam = randomTile();
+    g.inPlay = i < d.chasers;           // やさしいモードでは 4 人目はお休み
+    g.releaseDots = g.baseRelease < 0 ? -1 : Math.round(g.baseRelease * d.release);
+    if (g.inPlay && g.releaseDots < 0) {
       // もこだけは最初から巣の外
       g.state = 'graph';
       setTile(g, HOUSE_ENTRY.x, HOUSE_ENTRY.y, DIRS.left);
@@ -400,27 +456,26 @@ function resetGhosts() {
   });
 }
 
-// 追跡目標 (それぞれの性格)
-function chaseTarget(g) {
+// 性格ごとの追いかけ先
+function personalityTarget(g) {
   const p = tileOf(pac);
-  const d = pac.dir;
-  if (g.id === 'moko') {
-    return p;                                   // まっすぐ追いかける
+  if (g.id === 'mimiko') {
+    // ゆっくり先回りする: 進行方向の 4 マス先に回りこむ
+    const d = pac.dir;
+    return { x: p.x + d.x * 4, y: p.y + d.y * 4 };
   }
-  if (g.id === 'mimiko') {                      // 4 マス先で待ちぶせ
-    const t = { x: p.x + d.x * 4, y: p.y + d.y * 4 };
-    if (d.y === -1) t.x -= 4;                   // 本家の「上向きずれ」も再現
-    return t;
-  }
-  if (g.id === 'pote') {                        // もこの位置を使って挟みこむ
-    const t = { x: p.x + d.x * 2, y: p.y + d.y * 2 };
-    if (d.y === -1) t.x -= 2;
-    const b = tileOf(moko);
-    return { x: t.x * 2 - b.x, y: t.y * 2 - b.y };
-  }
-  // くろん: 近づくと逃げ出す気まぐれ屋
-  const dist = Math.hypot(g.x - pac.x, g.y - pac.y);
-  return dist > 8 ? p : g.scatter;
+  // もこはまっすぐ。ぽて・くろんも「追う気」のときはまっすぐ向かう
+  return p;
+}
+
+// 気分の切り替え。ぽては「のんびり」、くろんは「気まぐれ」に見える
+function updateMood(g, dt) {
+  g.mood -= dt;
+  if (g.mood > 0) return;
+  const [lo, hi] = g.span;
+  g.mood = lo + Math.random() * (hi - lo);
+  g.chasing = Math.random() < g.chaseP;
+  g.roam = randomTile();
 }
 
 function ghostDecide(g) {
@@ -443,12 +498,16 @@ function ghostDecide(g) {
   if (!opts.length) return;
 
   let pick;
-  if (g.fright && !g.eaten) {
+  // 逃げているとき・まよっているときは行き先を決めずに進む
+  const adrift = !g.eaten && (g.fright || confuseTimer > 0);
+  const whimsy = !g.eaten && mode !== 'scatter' && Math.random() < g.whim;
+  if (adrift || whimsy) {
     pick = opts[(Math.random() * opts.length) | 0];
   } else {
     const target = g.eaten ? HOUSE_ENTRY
                  : mode === 'scatter' ? g.scatter
-                 : chaseTarget(g);
+                 : g.chasing ? personalityTarget(g)
+                 : g.roam;
     let best = Infinity;
     for (const d of opts) {
       const nx = t.x + d.x, ny = t.y + d.y;
@@ -464,15 +523,16 @@ function ghostDecide(g) {
 function ghostSpeed(g) {
   if (g.eaten) return BASE_SPEED * 2.0;
   if (g.state !== 'graph') return BASE_SPEED * 0.5;
-  if (g.fright) return BASE_SPEED * spec.ghostFright;
+  if (g.fright) return BASE_SPEED * spec.ghostFright * g.speed;
   const t = tileOf(g);
-  if (t.y === TUNNEL_ROW && (t.x < 6 || t.x > 21)) return BASE_SPEED * spec.tunnel;
-  let s = spec.ghost;
+  if (t.y === TUNNEL_ROW && (t.x < 6 || t.x > 21)) return BASE_SPEED * spec.tunnel * g.speed;
+  let s = spec.ghost * g.speed;
   if (g.id === 'moko') {                        // 残りが少ないともこが加速する
     const left = pelletsLeft;
-    if (left <= 10) s += 0.12;
-    else if (left <= 20) s += 0.05;
+    if (left <= 10) s += 0.12 * D().elroy;
+    else if (left <= 20) s += 0.05 * D().elroy;
   }
+  if (confuseTimer > 0) s *= 0.75;              // まよっている間はもたつく
   return BASE_SPEED * s;
 }
 
@@ -537,6 +597,7 @@ let pelletsLeft = 0;
 let dotCounter = 0;      // 巣からの解放判定に使う
 let noDotTimer = 0;
 let frightTimer = 0;
+let confuseTimer = 0;    // ボーナスアイテムで おばけがまよっている残り時間
 let ghostChain = 0;      // 連続で食べた数
 let fruit = null;        // { t, pts, img }
 let fruitSpawned = 0;
@@ -564,6 +625,9 @@ const elHint = $('panelHint');
 const elToast = $('toast');
 const elSoundBtn = $('soundBtn');
 const elSoundIcon = $('soundIcon');
+const elDiffSeg = $('diffSeg');
+const elDiffNote = $('diffNote');
+const elDiffLabel = $('diffLabel');
 const canvas = $('game');
 const ctx = canvas.getContext('2d');
 
@@ -595,8 +659,17 @@ function updateScore(add) {
   if (score > highScore) {
     highScore = score;
     elHigh.textContent = highScore.toLocaleString('ja-JP');
-    try { localStorage.setItem('piyomaru.high', String(highScore)); } catch (e) { /* noop */ }
+    try { localStorage.setItem(highKey(), String(highScore)); } catch (e) { /* noop */ }
   }
+}
+
+// ハイスコアは むずかしさごとに分けて持つ
+const highKey = () => `piyomaru.high.${difficulty}`;
+
+function loadHighScore() {
+  highScore = 0;
+  try { highScore = Number(localStorage.getItem(highKey())) || 0; } catch (e) { /* noop */ }
+  elHigh.textContent = highScore.toLocaleString('ja-JP');
 }
 
 function drawLives() {
@@ -617,10 +690,11 @@ function toast(msg) {
   toastTimer = setTimeout(() => { elToast.hidden = true; }, 1800);
 }
 
-function showPanel({ eyebrow = '', title, text = '', showScore = false, button, hint }) {
+function showPanel({ eyebrow = '', title, text = '', showScore = false, showDiff = false, button, hint }) {
   elEyebrow.textContent = eyebrow;
   elTitle.textContent = title;
   elText.textContent = text;
+  elDiffSeg.hidden = !showDiff;
   elPanelScore.hidden = !showScore;
   elPanelScoreValue.textContent = score.toLocaleString('ja-JP');
   elPrimary.textContent = button;
@@ -630,6 +704,37 @@ function showPanel({ eyebrow = '', title, text = '', showScore = false, button, 
 }
 
 const hidePanel = () => { elOverlay.hidden = true; };
+
+/* ---------- むずかしさの切り替え ---------- */
+
+const DIFF_NOTE = {
+  easy:   'おいかけっこは 3 人だけ。\nみんなゆっくりで、のこり 5 機。',
+  normal: 'おいかけっこは 4 人。\n少しはやくなって、のこり 4 機。',
+  hard:   'おいかけっこは 4 人が本気。\nのこり 3 機で、もこが終盤に加速。',
+};
+
+function syncDiffUI() {
+  for (const btn of elDiffSeg.querySelectorAll('.seg__btn')) {
+    btn.setAttribute('aria-checked', String(btn.dataset.diff === difficulty));
+  }
+  elDiffNote.textContent = DIFF_NOTE[difficulty];
+  elDiffLabel.textContent = D().label;
+}
+
+function setDifficulty(id) {
+  if (!DIFFICULTY[id] || id === difficulty) return;
+  difficulty = id;
+  try { localStorage.setItem('piyomaru.diff', id); } catch (e) { /* noop */ }
+  spec = levelSpec(level);
+  sched = schedule(level);
+  loadHighScore();
+  syncDiffUI();
+  resetGhosts();   // 人数と配置をタイトル画面の表示にも反映する
+  if (state === 'title' || state === 'gameover') {
+    lives = D().lives;
+    drawLives();
+  }
+}
 
 /* =========================================================================
    8. 効果音 (WebAudio の簡易シンセ)
@@ -715,7 +820,7 @@ function setState(s) {
 
 function startGame() {
   score = 0;
-  lives = 3;
+  lives = D().lives;
   level = 1;
   extraLifeGiven = false;
   elScore.textContent = '0';
@@ -743,6 +848,7 @@ function resetRound() {
   resetPac();
   resetGhosts();
   frightTimer = 0;
+  confuseTimer = 0;
   ghostChain = 0;
   dotCounter = 0;
   noDotTimer = 0;
@@ -760,6 +866,7 @@ function loseLife() {
       title: 'ゲームオーバー',
       text: 'おばけにつかまっちゃった…',
       showScore: true,
+      showDiff: true,
       button: 'もういちど',
       hint: 'Enter / スペースでもはじめられます',
     });
@@ -787,6 +894,7 @@ function eatAt(tx, ty) {
       frightTimer = spec.fright;
       ghostChain = 0;
       for (const g of ghosts) {
+        if (!g.inPlay) continue;
         if (g.state === 'graph' && !g.eaten) {
           g.fright = true;
           reverse(g);
@@ -816,20 +924,27 @@ function addPopup(x, y, text) {
 // パワーゲージの DOM 更新は 1 フレーム 1 回だけ (simulate は 120Hz で回るため)
 let gaugeShown = false;
 function syncGauge() {
-  const show = frightTimer > 0;
+  const power = frightTimer > 0;                 // パワーエサ (食べられる)
+  const lost = !power && confuseTimer > 0;       // ボーナスで まよっている
+  const show = power || lost;
   if (show !== gaugeShown) {
     gaugeShown = show;
     elGauge.hidden = !show;
   }
   if (!show) return;
-  const ratio = spec.fright > 0 ? Math.max(0, Math.min(1, frightTimer / spec.fright)) : 0;
+  const span = power ? spec.fright : spec.confuse;
+  const left = power ? frightTimer : confuseTimer;
+  const ratio = span > 0 ? Math.max(0, Math.min(1, left / span)) : 0;
   elGaugeFill.style.transform = `scaleX(${ratio})`;
-  elGaugeFill.classList.toggle('is-low', frightTimer < 2);
+  elGaugeFill.classList.toggle('is-confused', lost);
+  elGaugeFill.classList.toggle('is-low', power && frightTimer < 2);
 }
 
 /* ---------- モード進行 ---------- */
 
 function updateModes(dt) {
+  if (confuseTimer > 0) confuseTimer = Math.max(0, confuseTimer - dt);
+
   if (frightTimer > 0) {
     frightTimer -= dt;
     if (frightTimer <= 0) {
@@ -846,7 +961,7 @@ function updateModes(dt) {
     schedTimer = 0;
     mode = sched[schedIndex][1];
     ghosts.forEach(g => {
-      if (g.state === 'graph' && !g.eaten) reverse(g);
+      if (g.inPlay && g.state === 'graph' && !g.eaten) reverse(g);
     });
   } else if (mode !== m) {
     mode = m;
@@ -855,10 +970,10 @@ function updateModes(dt) {
 
 function updateRelease(dt) {
   noDotTimer += dt;
-  const waiting = ghosts.filter(g => g.state === 'home' && g.wait <= 0);
+  const waiting = ghosts.filter(g => g.inPlay && g.state === 'home' && g.wait <= 0);
   if (!waiting.length) return;
   const next = waiting[0];
-  if (dotCounter >= next.releaseDots || noDotTimer > 4) {
+  if (dotCounter >= next.releaseDots || noDotTimer > D().idle) {
     noDotTimer = 0;
     releaseGhost(next);
   }
@@ -884,6 +999,8 @@ function simulate(dt) {
 
     // おばけ
     for (const g of ghosts) {
+      if (!g.inPlay) continue;
+      updateMood(g, dt);
       const sp = ghostSpeed(g) * dt;
       if (g.state === 'graph') {
         graphStep(g, sp);
@@ -911,6 +1028,7 @@ function simulate(dt) {
 
 function checkCollisions() {
   for (const g of ghosts) {
+    if (!g.inPlay) continue;
     if (g.state !== 'graph' || g.eaten) continue;
     if (Math.hypot(g.x - pac.x, g.y - pac.y) > 0.72) continue;
 
@@ -936,7 +1054,19 @@ function checkCollisions() {
     addPopup(FRUIT_POS.x, FRUIT_POS.y, String(fruit.pts));
     sfx.fruit();
     fruit = null;
+    startConfusion();
   }
+}
+
+// ボーナスアイテムを取ると おいかけっこのみんながまよう
+// (パワーエサとちがって食べられるようにはならないので、ぶつかればアウト)
+function startConfusion() {
+  confuseTimer = spec.confuse;
+  for (const g of ghosts) {
+    if (!g.inPlay) continue;
+    if (g.state === 'graph' && !g.eaten && !g.fright) reverse(g);
+  }
+  toast('おいかけっこが まよってる!');
 }
 
 /* =========================================================================
@@ -1005,9 +1135,26 @@ function drawGhost(g, t) {
     drawSprite(flashing ? IMG['chaser-scared-white'] : IMG['chaser-scared'], cx, cy, h);
     return;
   }
-  // ふわふわ上下に揺れる
+  // ふわふわ上下に揺れる。まよっている間はふらついて「?」が出る
+  const lost = confuseTimer > 0;
   const bob = Math.sin(t * 6 + g.bob) * TILE * 0.05;
-  drawSprite(IMG[g.img], cx, cy + bob, h);
+  const tilt = lost ? Math.sin(t * 9 + g.bob) * 0.28 : 0;
+  drawSprite(IMG[g.img], cx, cy + bob, h, 1, tilt);
+  if (lost) drawQuestion(cx + TILE * 0.6, cy - TILE * 0.8, t + g.bob);
+}
+
+function drawQuestion(x, y, t) {
+  ctx.save();
+  ctx.font = `700 ${TILE * 0.85}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = C_MAZE_BG;
+  const yy = y + Math.sin(t * 5) * TILE * 0.12;
+  ctx.strokeText('?', x, yy);
+  ctx.fillStyle = C_ACCENT_DARK;
+  ctx.fillText('?', x, yy);
+  ctx.restore();
 }
 
 function drawPac(t) {
@@ -1073,6 +1220,7 @@ function draw(t) {
 
   if (state !== 'dying') {
     for (const g of ghosts) {
+      if (!g.inPlay) continue;
       drawGhost(g, t);
       // トンネル通過中は反対側にも描く
       if (g.x < 1) drawGhostAt(g, g.x + COLS, t);
@@ -1150,7 +1298,7 @@ function frame(now) {
     }
     acc = Math.min(acc, FIXED);
 
-    if (state === 'ready' && stateTime > (level === 1 && lives === 3 ? 2.4 : 1.6)) {
+    if (state === 'ready' && stateTime > (level === 1 && lives === D().lives ? 2.4 : 1.6)) {
       setState('play');
     } else if (state === 'dying' && stateTime > 1.7) {
       loseLife();
@@ -1261,6 +1409,13 @@ elPrimary.addEventListener('click', () => {
   }
 });
 
+for (const btn of elDiffSeg.querySelectorAll('.seg__btn')) {
+  btn.addEventListener('click', () => {
+    sfx.unlock();
+    setDifficulty(btn.dataset.diff);
+  });
+}
+
 elSoundBtn.addEventListener('click', () => {
   const on = sfx.toggle();
   elSoundBtn.setAttribute('aria-pressed', String(on));
@@ -1283,14 +1438,21 @@ async function boot() {
   mazeCanvas = renderMaze(C_WALL);
   mazeCanvasFlash = renderMaze(token('--color-accent') || '#F7E7A8');
 
-  try { highScore = Number(localStorage.getItem('piyomaru.high')) || 0; } catch (e) { /* noop */ }
-  elHigh.textContent = highScore.toLocaleString('ja-JP');
+  try {
+    const saved = localStorage.getItem('piyomaru.diff');
+    if (DIFFICULTY[saved]) difficulty = saved;
+  } catch (e) { /* noop */ }
+  spec = levelSpec(level);
+  sched = schedule(level);
+  loadHighScore();
+  syncDiffUI();
 
   elSoundBtn.setAttribute('aria-pressed', String(sfx.enabled));
   elSoundIcon.textContent = sfx.enabled ? '♪' : '×';
 
   buildPellets();
   pelletsLeft = totalPellets;
+  lives = D().lives;
   resetPac();
   resetGhosts();
   drawLives();
@@ -1299,6 +1461,7 @@ async function boot() {
     eyebrow: 'PIYOMARU PAKKUN',
     title: 'ぴよまるパックン',
     text: 'エサをぜんぶ食べたらステージクリア。\n大きなエサを食べるとおばけを追いかえせます。',
+    showDiff: true,
     button: 'はじめる',
     hint: 'やじるしキー / WASD でうごく ・ P でポーズ',
   });

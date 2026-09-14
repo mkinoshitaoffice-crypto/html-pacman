@@ -93,6 +93,20 @@ body {
   100% { transform: scale(1); }
 }
 
+.hud__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xxs);
+}
+
+.diff-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
 .stage-badge {
   background: var(--color-text-primary);
   color: var(--color-text-inverse);
@@ -148,6 +162,67 @@ body {
 }
 
 .gauge__fill.is-low { background: var(--color-accent-dark); }
+.gauge__fill.is-confused { background: var(--color-accent-dark); }
+
+/* ---------- Difficulty selector ---------- */
+
+.seg {
+  margin-bottom: var(--space-md);
+}
+
+.seg[hidden] { display: none; }
+
+.seg__label {
+  display: block;
+  margin-bottom: var(--space-xs);
+  font-size: var(--font-size-xs);
+  letter-spacing: .12em;
+  color: var(--color-text-muted);
+}
+
+.seg__row {
+  display: flex;
+  gap: var(--space-xxs);
+  padding: var(--space-xxs);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-pill);
+}
+
+.seg__btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: var(--button-height-sm);
+  padding: 0 var(--space-xs);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-soft),
+              color var(--duration-fast) var(--ease-soft);
+}
+
+.seg__btn:hover { color: var(--color-text-primary); }
+
+.seg__btn[aria-checked="true"] {
+  background: var(--color-secondary);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-bold);
+  box-shadow: var(--shadow-card);
+}
+
+.seg__note {
+  margin: var(--space-xs) 0 0;
+  min-height: 2.6em;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-muted);
+  white-space: pre-line;
+}
 
 /* ---------- Icon button ---------- */
 
