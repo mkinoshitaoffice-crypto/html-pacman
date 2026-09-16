@@ -10,41 +10,6 @@
    1. 迷路データ
    ========================================================================= */
 
-// # 壁 / . エサ / o パワーエサ / - おばけの巣の扉 / H 巣の内部 / 空白 通路
-const MAZE = [
-  '############################',
-  '#............##............#',
-  '#.####.#####.##.#####.####.#',
-  '#o####.#####.##.#####.####o#',
-  '#.####.#####.##.#####.####.#',
-  '#..........................#',
-  '#.####.##.########.##.####.#',
-  '#.####.##.########.##.####.#',
-  '#......##....##....##......#',
-  '######.##### ## #####.######',
-  '     #.##### ## #####.#     ',
-  '     #.##          ##.#     ',
-  '     #.## ###--### ##.#     ',
-  '######.## #HHHHHH# ##.######',
-  '          #HHHHHH#          ',
-  '######.## #HHHHHH# ##.######',
-  '     #.## ######## ##.#     ',
-  '     #.##          ##.#     ',
-  '     #.## ######## ##.#     ',
-  '######.## ######## ##.######',
-  '#............##............#',
-  '#.####.#####.##.#####.####.#',
-  '#.####.#####.##.#####.####.#',
-  '#o..##................##..o#',
-  '###.##.##.########.##.##.###',
-  '###.##.##.########.##.##.###',
-  '#......##....##....##......#',
-  '#.##########.##.##########.#',
-  '#.##########.##.##########.#',
-  '#..........................#',
-  '############################',
-];
-
 const COLS = 28;
 const ROWS = 31;
 const TILE = 24;
@@ -57,36 +22,159 @@ const HOUSE_COL_X = 13.5;        // 巣から出入りするときの縦ライ�
 const HOUSE_INNER_Y = 14.5;      // 巣の中の待機ライン
 const HOUSE_RECT = { x: 10, y: 12, w: 8, h: 5 };  // nest.png を描く範囲
 const PAC_START = { x: 13, y: 23 };
-const FRUIT_POS = { x: 13.5, y: 17.5 };
 
 const T = { WALL: 0, PATH: 1, DOOR: 2, HOUSE: 3 };
 
-const grid = [];       // 地形
-let pellets = [];      // 0 なし / 1 エサ / 2 パワーエサ
-let totalPellets = 0;
+/* ---------- 迷路の生成 ----------------------------------------------------
+   9〜19 行目は固定。おばけの巣・扉・トンネル・左右の抜け道がここに収まって
+   いて、ここを崩すと おばけが巣から出られなくなるため触らない。
+   その上 (1〜8 行) と下 (20〜29 行) を毎ステージ作り直す。
+   格子の交点を結ぶ辺を「連結を保ったまま・行き止まりを作らない」範囲で
+   ランダムに間引くので、生成結果は必ず遊べる形になる。
+-------------------------------------------------------------------------- */
 
-for (let y = 0; y < ROWS; y++) {
-  grid[y] = [];
-  for (let x = 0; x < COLS; x++) {
-    const c = MAZE[y][x];
-    grid[y][x] = c === '#' ? T.WALL : c === '-' ? T.DOOR : c === 'H' ? T.HOUSE : T.PATH;
+const BAND_TOP = 9;
+const BAND = [
+  '######.##### ## #####.######',   //  9
+  '     #.##### ## #####.#     ',   // 10
+  '     #.##          ##.#     ',   // 11
+  '     #.## ###--### ##.#     ',   // 12
+  '######.## #HHHHHH# ##.######',   // 13
+  '          #HHHHHH#          ',   // 14  トンネル
+  '######.## #HHHHHH# ##.######',   // 15
+  '     #.## ######## ##.#     ',   // 16
+  '     #.##          ##.#     ',   // 17
+  '     #.## ######## ##.#     ',   // 18
+  '######.## ######## ##.######',   // 19
+];
+
+// 格子の縦線。左右対称 (x ↔ 27-x) になる並びを選んである
+const NODE_COLS = [1, 4, 6, 9, 12, 15, 18, 21, 23, 26];
+const TOP_ROWS = [1, 5, 8];          // 固定帯の上
+const BOT_ROWS = [20, 23, 26, 29];   // 固定帯の下
+
+const POWER_SPOTS = [
+  { x: 1, y: 5 }, { x: 26, y: 5 }, { x: 1, y: 23 }, { x: 26, y: 23 },
+];
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [a[i], a[j]] = [a[j], a[i]];
   }
+  return a;
 }
 
-function buildPellets() {
-  pellets = [];
-  totalPellets = 0;
-  for (let y = 0; y < ROWS; y++) {
-    pellets[y] = [];
-    for (let x = 0; x < COLS; x++) {
-      const c = MAZE[y][x];
-      let v = c === '.' ? 1 : c === 'o' ? 2 : 0;
-      if (x === PAC_START.x && y === PAC_START.y) v = 0;  // 開始地点は空に
-      pellets[y][x] = v;
-      if (v) totalPellets++;
+// 格子の辺を間引く。left/right が対になるよう必ず 2 本ずつ扱う
+function genRegion(nodeRows, keep) {
+  const NC = NODE_COLS.length;
+  const NR = nodeRows.length;
+  const h = [];   // h[r][i] : 縦線 i と i+1 を r 行でつなぐ
+  const v = [];   // v[r][i] : 横線 r と r+1 を i 列でつなぐ
+  for (let r = 0; r < NR; r++) h.push(new Array(NC - 1).fill(true));
+  for (let r = 0; r < NR - 1; r++) v.push(new Array(NC).fill(true));
+
+  const pairs = [];
+  for (let r = 0; r < NR; r++) {
+    for (let i = 0; i < NC - 1; i++) {
+      const j = NC - 2 - i;
+      if (j < i) continue;
+      pairs.push(i === j ? [['h', r, i]] : [['h', r, i], ['h', r, j]]);
+    }
+  }
+  for (let r = 0; r < NR - 1; r++) {
+    for (let i = 0; i < NC; i++) {
+      const j = NC - 1 - i;
+      if (j < i) continue;
+      pairs.push(i === j ? [['v', r, i]] : [['v', r, i], ['v', r, j]]);
+    }
+  }
+  shuffle(pairs);
+
+  const grids = { h, v };
+  const set = (t, r, i, val) => { grids[t][r][i] = val; };
+
+  const degree = (r, i) => {
+    let d = 0;
+    if (i > 0 && h[r][i - 1]) d++;
+    if (i < NC - 1 && h[r][i]) d++;
+    if (r > 0 && v[r - 1][i]) d++;
+    if (r < NR - 1 && v[r][i]) d++;
+    return d;
+  };
+
+  const noDeadEnd = () => {
+    for (let r = 0; r < NR; r++) {
+      for (let i = 0; i < NC; i++) if (degree(r, i) < 2) return false;
+    }
+    return true;
+  };
+
+  const connected = () => {
+    const seen = new Uint8Array(NR * NC);
+    const stack = [0];
+    seen[0] = 1;
+    let n = 1;
+    while (stack.length) {
+      const id = stack.pop();
+      const r = (id / NC) | 0, i = id % NC;
+      const push = nid => { if (!seen[nid]) { seen[nid] = 1; n++; stack.push(nid); } };
+      if (i > 0 && h[r][i - 1]) push(id - 1);
+      if (i < NC - 1 && h[r][i]) push(id + 1);
+      if (r > 0 && v[r - 1][i]) push(id - NC);
+      if (r < NR - 1 && v[r][i]) push(id + NC);
+    }
+    return n === NR * NC;
+  };
+
+  for (const pair of pairs) {
+    if (pair.some(([t, r, i]) => keep(t, r, i))) continue;
+    pair.forEach(([t, r, i]) => set(t, r, i, false));
+    if (!noDeadEnd() || !connected()) pair.forEach(([t, r, i]) => set(t, r, i, true));
+  }
+  return { h, v };
+}
+
+function carveRegion(rows, nodeRows, eg) {
+  const NC = NODE_COLS.length;
+  const open = (x, y) => { rows[y][x] = ' '; };
+  for (let r = 0; r < nodeRows.length; r++) {
+    for (let i = 0; i < NC; i++) open(NODE_COLS[i], nodeRows[r]);
+  }
+  for (let r = 0; r < nodeRows.length; r++) {
+    for (let i = 0; i < NC - 1; i++) {
+      if (!eg.h[r][i]) continue;
+      for (let x = NODE_COLS[i]; x <= NODE_COLS[i + 1]; x++) open(x, nodeRows[r]);
+    }
+  }
+  for (let r = 0; r < nodeRows.length - 1; r++) {
+    for (let i = 0; i < NC; i++) {
+      if (!eg.v[r][i]) continue;
+      for (let y = nodeRows[r]; y <= nodeRows[r + 1]; y++) open(NODE_COLS[i], y);
     }
   }
 }
+
+function genMaze() {
+  const rows = [];
+  for (let y = 0; y < ROWS; y++) rows.push(new Array(COLS).fill('#'));
+  for (let y = 0; y < BAND.length; y++) {
+    for (let x = 0; x < COLS; x++) rows[BAND_TOP + y][x] = BAND[y][x];
+  }
+  // ぴよまるの出発点 (13,23) を必ず通路にするため、23 行の中央の辺は残す
+  const keepStart = (t, r, i) => t === 'h' && r === 1 && NODE_COLS[i] === 12;
+  carveRegion(rows, TOP_ROWS, genRegion(TOP_ROWS, () => false));
+  carveRegion(rows, BOT_ROWS, genRegion(BOT_ROWS, keepStart));
+  return rows.map(r => r.join(''));
+}
+
+/* ---------- 盤面の状態 ---------- */
+
+let grid = [];         // 地形
+let pellets = [];      // 0 なし / 1 エサ / 2 パワーエサ
+let totalPellets = 0;
+let OPEN_TILES = [];   // 到達できる通路タイル (ぶらぶら歩き・アイテム配置に使う)
+let PELLET_TILES = []; // そのうちエサを置いてよいタイル
 
 function tileType(x, y) {
   if (y === TUNNEL_ROW && (x < 0 || x >= COLS)) return T.PATH;   // トンネル
@@ -95,15 +183,81 @@ function tileType(x, y) {
 }
 
 const isOpen = (x, y) => tileType(x, y) === T.PATH;
+const randomTile = () => OPEN_TILES[(Math.random() * OPEN_TILES.length) | 0];
 
-// ぶらぶら歩き (のんびり・気まぐれ) の目的地候補
-const OPEN_TILES = [];
-for (let y = 0; y < ROWS; y++) {
-  for (let x = 0; x < COLS; x++) {
-    if (grid[y][x] === T.PATH) OPEN_TILES.push({ x, y });
+// 巣のまわりとトンネルにはエサを置かない
+const noPelletZone = (x, y) =>
+  y === TUNNEL_ROW || (y >= 9 && y <= 19 && x >= 9 && x <= 18);
+
+// ぴよまるの出発点から届くタイルだけを拾う。
+// 生成の都合でできる閉じた隙間にエサが残ると クリア不能になるため必須
+function reachableFrom(start) {
+  const seen = [];
+  for (let y = 0; y < ROWS; y++) seen.push(new Uint8Array(COLS));
+  const stack = [start];
+  seen[start.y][start.x] = 1;
+  const tiles = [];
+  while (stack.length) {
+    const t = stack.pop();
+    tiles.push(t);
+    for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      let nx = t.x + d[0];
+      const ny = t.y + d[1];
+      if (nx < 0) nx += COLS; else if (nx >= COLS) nx -= COLS;
+      if (ny < 0 || ny >= ROWS) continue;
+      if (!isOpen(nx, ny) || seen[ny][nx]) continue;
+      seen[ny][nx] = 1;
+      stack.push({ x: nx, y: ny });
+    }
+  }
+  return tiles;
+}
+
+function applyMaze(rows) {
+  grid = [];
+  for (let y = 0; y < ROWS; y++) {
+    grid[y] = [];
+    for (let x = 0; x < COLS; x++) {
+      const c = rows[y][x];
+      grid[y][x] = c === '#' ? T.WALL : c === '-' ? T.DOOR : c === 'H' ? T.HOUSE : T.PATH;
+    }
+  }
+  OPEN_TILES = reachableFrom(PAC_START);
+  PELLET_TILES = OPEN_TILES.filter(t =>
+    !noPelletZone(t.x, t.y) && !(t.x === PAC_START.x && t.y === PAC_START.y));
+}
+
+// 巣の出入口まで行けて、エサを置ける場所が十分にあるかを確かめる
+function mazeIsPlayable() {
+  if (!OPEN_TILES.some(t => t.x === HOUSE_ENTRY.x && t.y === HOUSE_ENTRY.y)) return false;
+  if (!isOpen(PAC_START.x, PAC_START.y)) return false;
+  for (const p of POWER_SPOTS) {
+    if (!OPEN_TILES.some(t => t.x === p.x && t.y === p.y)) return false;
+  }
+  return PELLET_TILES.length >= 150;
+}
+
+function newMaze() {
+  for (let i = 0; i < 40; i++) {
+    applyMaze(genMaze());
+    if (mazeIsPlayable()) return;
+  }
+  // 念のための保険。ここに来ることはまずない
+  applyMaze(genMaze());
+}
+
+function buildPellets() {
+  pellets = [];
+  for (let y = 0; y < ROWS; y++) pellets[y] = new Array(COLS).fill(0);
+  totalPellets = 0;
+  for (const t of PELLET_TILES) {
+    pellets[t.y][t.x] = 1;
+    totalPellets++;
+  }
+  for (const p of POWER_SPOTS) {
+    if (pellets[p.y][p.x] === 1) pellets[p.y][p.x] = 2;
   }
 }
-const randomTile = () => OPEN_TILES[(Math.random() * OPEN_TILES.length) | 0];
 
 /* =========================================================================
    2. 画像の読み込み
@@ -120,14 +274,33 @@ const IMG_NAMES = [
   'nest',
 ];
 
+// たべものの効果で使う差し替えキャラ (png/new)
+const MINI_COLORS = ['peach', 'mint', 'cream', 'lilac'];
+const NEW_NAMES = ['piyomaru-black', 'piyomaru-black-left'];
+for (const c of MINI_COLORS) {
+  for (const d of ['up', 'down', 'left', 'right']) {
+    for (const m of ['open', 'closed']) NEW_NAMES.push(`mini-${c}-${d}-${m}`);
+  }
+}
+for (const d of ['up', 'down', 'left', 'right']) {
+  for (const m of ['open', 'closed']) NEW_NAMES.push(`pink-${d}-${m}`);
+}
+
 const IMG = {};
 
-function loadImages() {
-  return Promise.all(IMG_NAMES.map(name => new Promise(resolve => {
+function loadOne(key, src) {
+  return new Promise(resolve => {
     const img = new Image();
-    img.onload = img.onerror = () => { IMG[name] = img; resolve(); };
-    img.src = `png/${name}.png`;
-  })));
+    img.onload = img.onerror = () => { IMG[key] = img; resolve(); };
+    img.src = src;
+  });
+}
+
+function loadImages() {
+  return Promise.all([
+    ...IMG_NAMES.map(n => loadOne(n, `png/${n}.png`)),
+    ...NEW_NAMES.map(n => loadOne(n, `png/new/${n}.png`)),
+  ]);
 }
 
 // 元画像のアルファを保ったまま白寄りに色を乗せる (パワー切れ間際の点滅用)
@@ -152,20 +325,21 @@ const BASE_SPEED = 9.5;   // 100% のときのタイル/秒
 
 const FRIGHT_TIME = [6, 5, 4, 3, 2, 5, 2, 2, 1, 5, 2, 1, 1, 3, 1, 1, 0, 1, 0, 0, 0];
 
-const FRUITS = [
-  { img: 'item-cherry',  pts: 100,  label: 'さくらんぼ' },
-  { img: 'item-mikan',   pts: 300,  label: 'みかん' },
-  { img: 'item-grape',   pts: 500,  label: 'ぶどう' },
-  { img: 'item-grape',   pts: 500,  label: 'ぶどう' },
-  { img: 'item-daifuku', pts: 700,  label: 'だいふく' },
-  { img: 'item-daifuku', pts: 700,  label: 'だいふく' },
-  { img: 'item-cherry',  pts: 1000, label: 'さくらんぼ' },
-  { img: 'item-cherry',  pts: 1000, label: 'さくらんぼ' },
-  { img: 'item-mikan',   pts: 2000, label: 'みかん' },
-  { img: 'item-mikan',   pts: 2000, label: 'みかん' },
-  { img: 'item-grape',   pts: 3000, label: 'ぶどう' },
-  { img: 'item-daifuku', pts: 5000, label: 'だいふく' },
+// たべもの。ステージ 1 から 4 種類すべてが出る。どれが出るかは毎回ランダム
+const EFFECT_TIME = 5;   // どの効果も 5 秒
+
+const FRUIT_KINDS = [
+  { id: 'daifuku', img: 'item-daifuku', pts: 700, label: 'いちご大福',
+    note: 'ミニぴよまる とうじょう!' },
+  { id: 'cherry',  img: 'item-cherry',  pts: 300, label: 'さくらんぼ',
+    note: 'スコア 3ばい!' },
+  { id: 'mikan',   img: 'item-mikan',   pts: 400, label: 'みかん',
+    note: 'すきとおって みんなまよう!' },
+  { id: 'grape',   img: 'item-grape',   pts: 500, label: 'ぶどう',
+    note: 'ブラックぴよまるが つかまえた!' },
 ];
+
+const randomFruitKind = () => FRUIT_KINDS[(Math.random() * FRUIT_KINDS.length) | 0];
 
 /* ---------- むずかしさ ---------- */
 
@@ -201,7 +375,6 @@ function levelSpec(L) {
     tunnel:     (L === 1 ? 0.40 : L < 5 ? 0.45 : 0.50) * d.ghost,
     fright:     Math.max(baseFright * d.fright, d.frightMin),
     confuse:    d.confuse,
-    fruit:      FRUITS[Math.min(L - 1, FRUITS.length - 1)],
   };
 }
 
@@ -304,6 +477,11 @@ function renderMaze(color) {
 
 let mazeCanvas = null;
 let mazeCanvasFlash = null;
+
+function rebuildMazeArt() {
+  mazeCanvas = renderMaze(C_WALL);
+  mazeCanvasFlash = renderMaze(token('--color-accent') || '#F7E7A8');
+}
 
 /* =========================================================================
    5. アクター
@@ -408,7 +586,7 @@ function makeGhost(id, name, img, scatter, releaseDots, homeX, brain) {
     from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, prog: 0, stopped: true,
     dir: DIRS.left, x: 0, y: 0,
     state: 'home',        // home | exit | graph | enter
-    fright: false, eaten: false, inPlay: true,
+    fright: false, eaten: false, inPlay: true, bound: 0,
     chasing: true, mood: 0, roam: { x: 13, y: 11 },
     path: [], wait: 0, bob: Math.random() * 6,
     onArrive() { ghostDecide(this); },
@@ -440,6 +618,7 @@ function resetGhosts() {
     g.bob = i * 1.7;
     g.chasing = true;
     g.mood = 0;
+    g.bound = 0;
     g.roam = randomTile();
     g.inPlay = i < d.chasers;           // やさしいモードでは 4 人目はお休み
     g.releaseDots = g.baseRelease < 0 ? -1 : Math.round(g.baseRelease * d.release);
@@ -599,9 +778,26 @@ let noDotTimer = 0;
 let frightTimer = 0;
 let confuseTimer = 0;    // ボーナスアイテムで おばけがまよっている残り時間
 let ghostChain = 0;      // 連続で食べた数
-let fruit = null;        // { t, pts, img }
+let fruit = null;        // { t, x, y, kind }
 let fruitSpawned = 0;
 let popups = [];
+
+// たべものの効果
+let tripleTimer = 0;     // さくらんぼ: スコア 3 倍 (ぴよまるがピンクになる)
+let clearTimer = 0;       // みかん: 半透明になる
+let minis = [];          // いちご大福: ミニぴよまる
+let blackPiyo = null;    // ぶどう: おばけを 1 人つかまえるブラックぴよまる
+
+// 祝福エフェクト
+const CELEBRATIONS = [1000, 3000, 5000, 10000, 15000, 30000];
+const CELEBRATION_TEXT = [
+  '1000てん とっぱ!', '3000てん とっぱ!', '5000てん とっぱ!',
+  '10000てん とっぱ!!', '15000てん とっぱ!!', '30000てん とっぱ!!!',
+];
+let celebIndex = 0;
+let particles = [];
+let banner = null;       // { text, t, mode }
+let flashTimer = 0;
 
 /* =========================================================================
    7. DOM
@@ -646,8 +842,12 @@ function bump(el) {
 }
 
 function updateScore(add) {
-  score += add;
+  score += add * (tripleTimer > 0 ? 3 : 1);   // さくらんぼ中は 3 倍
   elScore.textContent = score.toLocaleString('ja-JP');
+  while (celebIndex < CELEBRATIONS.length && score >= CELEBRATIONS[celebIndex]) {
+    celebrate(celebIndex);
+    celebIndex++;
+  }
   if (add >= 50) bump(elScore);   // エサ 1 粒ごとに跳ねるとうるさいので
   if (!extraLifeGiven && score >= 10000) {
     extraLifeGiven = true;
@@ -806,6 +1006,18 @@ const sfx = (() => {
     clear() {
       [659, 784, 1046, 1318, 1568].forEach((f, i) => tone(f, 0.16, 'triangle', 0.05, null, i * 0.11));
     },
+    celebrate(level) {
+      const tunes = [
+        [523, 659, 784],
+        [587, 740, 880, 1109],
+        [659, 831, 988, 1319],
+        [523, 659, 784, 1046, 1319],
+        [440, 554, 659, 880, 1109, 1319],
+        [523, 659, 784, 1046, 1319, 1568, 2093],
+      ];
+      (tunes[level] || tunes[0]).forEach((f, i) =>
+        tone(f, 0.2, 'triangle', 0.055, null, i * 0.1));
+    },
   };
 })();
 
@@ -823,6 +1035,7 @@ function startGame() {
   lives = D().lives;
   level = 1;
   extraLifeGiven = false;
+  celebIndex = 0;
   elScore.textContent = '0';
   drawLives();
   sfx.start();
@@ -835,11 +1048,16 @@ function startLevel() {
   schedIndex = 0;
   schedTimer = 0;
   mode = sched[0][1];
+  newMaze();          // ステージごとに迷路を作り直す
+  rebuildMazeArt();
   buildPellets();
   pelletsLeft = totalPellets;
   fruit = null;
   fruitSpawned = 0;
   popups = [];
+  particles = [];
+  banner = null;
+  flashTimer = 0;
   elStage.textContent = `ステージ ${level}`;
   resetRound();
 }
@@ -849,6 +1067,11 @@ function resetRound() {
   resetGhosts();
   frightTimer = 0;
   confuseTimer = 0;
+  tripleTimer = 0;
+  clearTimer = 0;
+  minis = [];
+  blackPiyo = null;
+  ghosts.forEach(g => { g.bound = 0; });
   ghostChain = 0;
   dotCounter = 0;
   noDotTimer = 0;
@@ -903,12 +1126,11 @@ function eatAt(tx, ty) {
     }
   }
 
-  // フルーツの出現
-  if ((pelletsLeft === totalPellets - 70 && fruitSpawned === 0) ||
-      (pelletsLeft === totalPellets - 170 && fruitSpawned === 1)) {
+  // たべものの出現。1 ステージに 4 回、種類も場所も毎回ランダム
+  const eaten = totalPellets - pelletsLeft;
+  if (fruitSpawned < 4 && eaten >= Math.round(totalPellets * (fruitSpawned + 1) / 5)) {
     fruitSpawned++;
-    fruit = { t: 9.5, pts: spec.fruit.pts, img: spec.fruit.img };
-    toast(`${spec.fruit.label}が でたよ!`);
+    spawnFruit();
   }
 
   if (pelletsLeft <= 0) {
@@ -997,10 +1219,30 @@ function simulate(dt) {
     graphStep(pac, pacSpeed * dt);
     if (!pac.stopped) pac.anim += dt;
 
+    // たべものの効果のタイマー
+    if (tripleTimer > 0) tripleTimer = Math.max(0, tripleTimer - dt);
+    if (clearTimer > 0) clearTimer = Math.max(0, clearTimer - dt);
+    if (blackPiyo) {
+      blackPiyo.t -= dt;
+      if (blackPiyo.t <= 0) blackPiyo = null;
+    }
+
+    // ミニぴよまる
+    for (const m of minis) {
+      m.life -= dt;
+      graphStep(m, BASE_SPEED * 0.85 * dt);
+      if (!m.stopped) m.anim += dt;
+    }
+    minis = minis.filter(m => m.life > 0);
+
     // おばけ
     for (const g of ghosts) {
       if (!g.inPlay) continue;
       updateMood(g, dt);
+      if (g.bound > 0) {                 // ブラックぴよまるに つかまっている
+        g.bound -= dt;
+        continue;
+      }
       const sp = ghostSpeed(g) * dt;
       if (g.state === 'graph') {
         graphStep(g, sp);
@@ -1016,20 +1258,28 @@ function simulate(dt) {
     checkCollisions();
   }
 
-  // フルーツ
+  // たべもの
   if (fruit && state === 'play') {
     fruit.t -= dt;
     if (fruit.t <= 0) fruit = null;
   }
 
-  // スコア表示
+  // スコア表示・お祝い
   popups = popups.filter(p => (p.t += dt) < 0.9);
+  updateParticles(dt);
 }
 
 function checkCollisions() {
   for (const g of ghosts) {
     if (!g.inPlay) continue;
     if (g.state !== 'graph' || g.eaten) continue;
+
+    // つかまっている間は こちらを捕まえられない。ミニぴよまるは追い払える
+    if (g.bound > 0) continue;
+    if (minis.length) {
+      minis = minis.filter(m => Math.hypot(g.x - m.x, g.y - m.y) > 0.7);
+    }
+
     if (Math.hypot(g.x - pac.x, g.y - pac.y) > 0.72) continue;
 
     if (g.fright) {
@@ -1048,42 +1298,206 @@ function checkCollisions() {
     }
   }
 
-  // フルーツ
-  if (fruit && Math.hypot(FRUIT_POS.x - pac.x, FRUIT_POS.y - pac.y) < 0.8) {
-    updateScore(fruit.pts);
-    addPopup(FRUIT_POS.x, FRUIT_POS.y, String(fruit.pts));
-    sfx.fruit();
+  // たべもの
+  if (fruit && Math.hypot(fruit.x - pac.x, fruit.y - pac.y) < 0.8) {
+    const kind = fruit.kind;
+    addPopup(fruit.x, fruit.y, String(kind.pts));
     fruit = null;
-    startConfusion();
+    updateScore(kind.pts);
+    sfx.fruit();
+    applyFruit(kind);
   }
 }
 
 // ボーナスアイテムを取ると おいかけっこのみんながまよう
 // (パワーエサとちがって食べられるようにはならないので、ぶつかればアウト)
-function startConfusion() {
-  confuseTimer = spec.confuse;
+function startConfusion(seconds) {
+  confuseTimer = Math.max(confuseTimer, seconds);
   for (const g of ghosts) {
     if (!g.inPlay) continue;
     if (g.state === 'graph' && !g.eaten && !g.fright) reverse(g);
   }
-  toast('おいかけっこが まよってる!');
+}
+
+/* =========================================================================
+   9b. たべものと その効果
+   ========================================================================= */
+
+// ぴよまるから少し離れた通路にたべものを置く
+function spawnFruit() {
+  const cands = OPEN_TILES.filter(t =>
+    !noPelletZone(t.x, t.y) && Math.hypot(t.x + 0.5 - pac.x, t.y + 0.5 - pac.y) > 5);
+  const pool = cands.length ? cands : OPEN_TILES;
+  const t = pool[(Math.random() * pool.length) | 0];
+  fruit = { t: 9.5, x: t.x + 0.5, y: t.y + 0.5, kind: randomFruitKind() };
+  toast(`${fruit.kind.label}が でたよ!`);
+}
+
+function applyFruit(kind) {
+  switch (kind.id) {
+    case 'cherry':                       // ぴよまるがピンクに。5 秒間スコア 3 倍
+      tripleTimer = EFFECT_TIME;
+      break;
+    case 'mikan':                        // 半透明になり おいかけっこがまよう
+      clearTimer = EFFECT_TIME;
+      startConfusion(EFFECT_TIME);
+      break;
+    case 'grape':                        // ブラックぴよまるが 1 人つかまえる
+      spawnBlackPiyo();
+      break;
+    case 'daifuku':                      // ミニぴよまるが 4 体でエサを食べる
+      spawnMinis();
+      break;
+  }
+  toast(kind.note);
+}
+
+/* ---------- いちご大福: ミニぴよまる ---------- */
+
+// d の向きに n マス先までエサがあるか
+function pelletAhead(x, y, d, n) {
+  for (let i = 1; i <= n; i++) {
+    const nx = ((x + d.x * i) % COLS + COLS) % COLS;
+    const ny = y + d.y * i;
+    if (ny < 0 || ny >= ROWS || !isOpen(nx, ny)) return false;
+    if (pellets[ny][nx]) return true;
+  }
+  return false;
+}
+
+function miniDecide(m) {
+  const t = m.from;
+  eatAt(t.x, t.y);
+  const back = { x: -m.dir.x, y: -m.dir.y };
+  let opts = DIR_ORDER.filter(d =>
+    isOpen(t.x + d.x, t.y + d.y) && !(d.x === back.x && d.y === back.y));
+  if (!opts.length) opts = DIR_ORDER.filter(d => isOpen(t.x + d.x, t.y + d.y));
+  if (!opts.length) return;
+  const tasty = opts.filter(d => pelletAhead(t.x, t.y, d, 5));
+  const pool = tasty.length ? tasty : opts;
+  const pick = pool[(Math.random() * pool.length) | 0];
+  m.dir = pick;
+  m.to = { x: t.x + pick.x, y: t.y + pick.y };
+  m.stopped = false;
+}
+
+function spawnMinis() {
+  minis = [];
+  const pool = OPEN_TILES.filter(t => !noPelletZone(t.x, t.y));
+  for (let i = 0; i < 4; i++) {
+    const t = pool.length ? pool[(Math.random() * pool.length) | 0] : PAC_START;
+    const m = {
+      from: { x: 0, y: 0 }, to: { x: 0, y: 0 }, prog: 0, stopped: true,
+      dir: DIRS.left, x: 0, y: 0, life: EFFECT_TIME, anim: Math.random(),
+      color: MINI_COLORS[i % MINI_COLORS.length],
+      onArrive() { miniDecide(this); },
+    };
+    setTile(m, t.x, t.y, DIR_ORDER[(Math.random() * 4) | 0]);
+    minis.push(m);
+  }
+}
+
+/* ---------- ぶどう: ブラックぴよまる ---------- */
+
+function spawnBlackPiyo() {
+  const cands = ghosts.filter(g =>
+    g.inPlay && g.state === 'graph' && !g.eaten && !g.bound);
+  if (!cands.length) return;
+  let best = cands[0], bd = Infinity;
+  for (const g of cands) {
+    const d = Math.hypot(g.x - pac.x, g.y - pac.y);
+    if (d < bd) { bd = d; best = g; }
+  }
+  best.bound = EFFECT_TIME;
+  blackPiyo = { g: best, t: EFFECT_TIME };
+}
+
+/* ---------- 祝福エフェクト ---------- */
+
+function celebrate(i) {
+  banner = { text: CELEBRATION_TEXT[i], t: 0, mode: i };
+  particles = particles.slice(-40);
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  if (i === 0) {                                  // 紙吹雪
+    for (let n = 0; n < 70; n++) {
+      particles.push({ k: 'confetti', x: rnd(0, COLS), y: rnd(-6, 0),
+        vx: rnd(-0.6, 0.6), vy: rnd(3, 6), rot: rnd(0, 6), vr: rnd(-6, 6),
+        c: ['#F1AAA0', '#BFDCD3', '#F7E7A8', '#CFA9C8'][n % 4], t: 0, life: 2.6 });
+    }
+  } else if (i === 1) {                           // 波紋
+    for (let n = 0; n < 5; n++) {
+      particles.push({ k: 'ring', x: COLS / 2, y: ROWS / 2,
+        r: 0, vr: 9, delay: n * 0.16, c: '#BFDCD3', t: 0, life: 1.8 });
+    }
+  } else if (i === 2) {                           // 星がはじける
+    for (let n = 0; n < 40; n++) {
+      const a = (n / 40) * Math.PI * 2 + rnd(-0.1, 0.1);
+      const s = rnd(6, 13);
+      particles.push({ k: 'star', x: COLS / 2, y: ROWS / 2,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s, rot: rnd(0, 6), vr: rnd(-8, 8),
+        c: '#F7E7A8', t: 0, life: 1.6 });
+    }
+  } else if (i === 3) {                           // 花火
+    for (let b = 0; b < 5; b++) {
+      const cx = rnd(4, COLS - 4), cy = rnd(4, ROWS - 8);
+      for (let n = 0; n < 26; n++) {
+        const a = (n / 26) * Math.PI * 2;
+        const s = rnd(5, 10);
+        particles.push({ k: 'spark', x: cx, y: cy,
+          vx: Math.cos(a) * s, vy: Math.sin(a) * s, delay: b * 0.35,
+          c: ['#F1AAA0', '#F7E7A8', '#BFDCD3', '#CFA9C8', '#EFC780'][b], t: 0, life: 1.5 });
+      }
+    }
+  } else if (i === 4) {                           // ぴよまるのパレード
+    for (let n = 0; n < 7; n++) {
+      particles.push({ k: 'parade', x: -2 - n * 3.2, y: rnd(3, ROWS - 4),
+        vx: rnd(7, 10), vy: 0, bob: rnd(0, 6), t: 0, life: 4.2 });
+    }
+  } else {                                        // 虹色フラッシュ + 大量の紙吹雪
+    flashTimer = 0.9;
+    for (let n = 0; n < 150; n++) {
+      particles.push({ k: 'confetti', x: rnd(0, COLS), y: rnd(-10, 0),
+        vx: rnd(-1.2, 1.2), vy: rnd(4, 9), rot: rnd(0, 6), vr: rnd(-9, 9),
+        c: `hsl(${(n * 23) % 360} 70% 72%)`, t: 0, life: 3.6 });
+    }
+  }
+  sfx.celebrate(i);
+}
+
+function updateParticles(dt) {
+  if (flashTimer > 0) flashTimer = Math.max(0, flashTimer - dt);
+  if (banner) { banner.t += dt; if (banner.t > 2.4) banner = null; }
+  if (!particles.length) return;
+  for (const p of particles) {
+    p.t += dt;
+    if (p.delay && p.t < p.delay) continue;
+    if (p.k === 'ring') { p.r += p.vr * dt; continue; }
+    p.x += (p.vx || 0) * dt;
+    p.y += (p.vy || 0) * dt;
+    if (p.k === 'confetti') { p.vy += 2 * dt; p.rot += p.vr * dt; }
+    if (p.k === 'star') { p.vy += 6 * dt; p.rot += p.vr * dt; }
+    if (p.k === 'spark') { p.vy += 7 * dt; p.vx *= 0.97; p.vy *= 0.97; }
+  }
+  particles = particles.filter(p => p.t < (p.delay || 0) + p.life);
 }
 
 /* =========================================================================
    10. 描画
    ========================================================================= */
 
-function drawSprite(img, cx, cy, h, alpha = 1, rot = 0, scale = 1) {
+function drawSprite(img, cx, cy, h, alpha = 1, rot = 0, scale = 1, flipX = false, flipY = false) {
   if (!img) return;
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   if (!iw || !ih) return;
-  const dh = h * scale;
+  const dh = h * Math.max(0, scale);
   const dw = dh * iw / ih;
   ctx.save();
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
   ctx.translate(cx, cy);
   if (rot) ctx.rotate(rot);
+  if (flipX || flipY) ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
   ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
   ctx.restore();
 }
@@ -1093,6 +1507,12 @@ function dirName(d) {
   if (d.y > 0) return 'down';
   if (d.x < 0) return 'left';
   return 'right';
+}
+
+// png/new の素材は 4 方向とも専用絵がある
+function dirSprite(prefix, dir, open) {
+  const frame = open ? 'open' : 'closed';
+  return { img: IMG[`${prefix}-${dirName(dir)}-${frame}`], fx: false, fy: false };
 }
 
 function drawPellets(t) {
@@ -1172,9 +1592,111 @@ function drawPac(t) {
 
   const moving = !pac.stopped && (state === 'play');
   const open = moving ? Math.floor(pac.anim * 11) % 2 === 0 : false;
-  const img = IMG[`piyomaru-${d}-${open ? 'open' : 'closed'}`];
   const squash = state === 'ready' ? 1 + Math.sin(t * 6) * 0.04 : 1;
-  drawSprite(img, cx, cy, h, 1, 0, squash);
+  // みかん中は半透明、さくらんぼ中はピンクぴよまるに変身
+  const alpha = clearTimer > 0 ? 0.42 + Math.sin(t * 7) * 0.08 : 1;
+
+  if (tripleTimer > 0) {
+    const s = dirSprite('pink', pac.dir, open);
+    if (s.img) { drawSprite(s.img, cx, cy, h * 1.04, alpha, 0, squash, s.fx, s.fy); return; }
+  }
+  const img = IMG[`piyomaru-${d}-${open ? 'open' : 'closed'}`];
+  drawSprite(img, cx, cy, h, alpha, 0, squash);
+}
+
+function drawMinis(t) {
+  for (const m of minis) {
+    const open = Math.floor(m.anim * 13) % 2 === 0;
+    const s = dirSprite(`mini-${m.color}`, m.dir, open);
+    const fade = Math.min(1, Math.max(0, m.life));
+    const pop = Math.min(1, Math.max(0, (EFFECT_TIME - m.life) / 0.25));
+    drawSprite(s.img, m.x * TILE, m.y * TILE + Math.sin(t * 9 + m.anim) * TILE * 0.06,
+      TILE * 1.05, fade, 0, pop, s.fx, s.fy);
+  }
+}
+
+function drawBlackPiyo(t) {
+  if (!blackPiyo) return;
+  const g = blackPiyo.g;
+  const a = t * 3;
+  // つかまえたおばけの まわりをぐるぐる回る。進む向きに顔を向ける
+  const movingLeft = -Math.sin(a) < 0;
+  const img = (movingLeft ? IMG['piyomaru-black-left'] : IMG['piyomaru-black'])
+    || IMG['piyomaru-black'] || IMG['piyomaru-right-closed'];
+  const cx = g.x * TILE + Math.cos(a) * TILE * 0.62;
+  const cy = g.y * TILE + Math.sin(a) * TILE * 0.36 - TILE * 0.1;
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = C_TEXT;
+  ctx.beginPath();
+  ctx.arc(g.x * TILE, g.y * TILE, TILE * 0.85, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  drawSprite(img, cx, cy, TILE * 1.15);
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const age = p.t - (p.delay || 0);
+    if (age < 0) continue;
+    const k = age / p.life;
+    const x = p.x * TILE, y = p.y * TILE;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - k * k);
+    if (p.k === 'confetti') {
+      ctx.translate(x, y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      ctx.fillRect(-TILE * 0.18, -TILE * 0.1, TILE * 0.36, TILE * 0.2);
+    } else if (p.k === 'ring') {
+      ctx.strokeStyle = p.c;
+      ctx.lineWidth = TILE * 0.3;
+      ctx.beginPath();
+      ctx.arc(x, y, p.r * TILE, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (p.k === 'star') {
+      ctx.translate(x, y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 ? TILE * 0.16 : TILE * 0.4;
+        const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+    } else if (p.k === 'spark') {
+      ctx.fillStyle = p.c;
+      ctx.beginPath();
+      ctx.arc(x, y, TILE * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.k === 'parade') {
+      const img = IMG['piyomaru-right-open'];
+      drawSprite(img, x, y + Math.sin(age * 9 + p.bob) * TILE * 0.5, TILE * 1.5,
+        Math.max(0, 1 - k * k));
+    }
+    ctx.restore();
+  }
+}
+
+function drawBanner() {
+  if (!banner) return;
+  const k = Math.min(banner.t / 0.3, 1);
+  const out = banner.t > 2.0 ? 1 - (banner.t - 2.0) / 0.4 : 1;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, out);
+  ctx.translate(W / 2, H * 0.30);
+  ctx.scale(0.7 + k * 0.3, 0.7 + k * 0.3);
+  ctx.font = `700 ${TILE * 1.25}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = C_MAZE_BG;
+  ctx.strokeText(banner.text, 0, 0);
+  ctx.fillStyle = banner.mode >= 3 ? C_PRIMARY : C_ACCENT_DARK;
+  ctx.fillText(banner.text, 0, 0);
+  ctx.restore();
 }
 
 function drawCenterText(text, y, size, color) {
@@ -1214,7 +1736,15 @@ function draw(t) {
   if (fruit) {
     const blink = fruit.t < 2.5 && Math.floor(fruit.t * 6) % 2 === 0;
     const wobble = Math.sin(t * 4) * 0.08;
-    drawSprite(IMG[fruit.img], FRUIT_POS.x * TILE, FRUIT_POS.y * TILE,
+    // 場所が毎回ちがうので、ふんわり光らせて見つけやすくする
+    ctx.save();
+    ctx.globalAlpha = 0.22 + Math.sin(t * 5) * 0.08;
+    ctx.fillStyle = C_ACCENT_DARK;
+    ctx.beginPath();
+    ctx.arc(fruit.x * TILE, fruit.y * TILE, TILE * 0.95, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    drawSprite(IMG[fruit.kind.img], fruit.x * TILE, fruit.y * TILE,
       TILE * 1.45, blink ? 0.35 : 1, wobble);
   }
 
@@ -1227,6 +1757,9 @@ function draw(t) {
       else if (g.x > COLS - 1) drawGhostAt(g, g.x - COLS, t);
     }
   }
+
+  drawBlackPiyo(t);
+  drawMinis(t);
 
   drawPac(t);
   if (pac.x < 1) drawPacAt(pac.x + COLS);
@@ -1249,12 +1782,30 @@ function draw(t) {
     ctx.restore();
   }
 
+  // みかん (半透明) の残り時間カウント
+  if (clearTimer > 0) {
+    drawCenterText(`とうめい ${Math.ceil(clearTimer)}`, 8.6 * TILE, TILE * 1.05, C_TEXT);
+  }
+
   if (state === 'ready') {
     drawCenterText('READY!', 17.5 * TILE, TILE * 1.15, C_ACCENT_DARK);
   }
   if (state === 'clear') {
     drawCenterText('ステージクリア!', 17.5 * TILE, TILE * 1.0, C_TEXT);
   }
+
+  // お祝い
+  if (flashTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.55, flashTimer * 0.6);
+    const grad = ctx.createLinearGradient(0, 0, W, H);
+    for (let i = 0; i <= 6; i++) grad.addColorStop(i / 6, `hsl(${i * 60} 80% 72%)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  drawParticles();
+  drawBanner();
 }
 
 function drawGhostAt(g, x, t) {
@@ -1346,21 +1897,73 @@ window.addEventListener('keydown', e => {
   if (e.key === 'm' || e.key === 'M') { e.preventDefault(); elSoundBtn.click(); }
 });
 
-// D-pad
-for (const btn of document.querySelectorAll('.dpad__btn')) {
-  const dir = btn.dataset.dir;
-  const press = e => {
-    e.preventDefault();
-    setDir(dir);
-    btn.classList.add('is-on');
+/* ---------- D-pad ----------------------------------------------------------
+   スマートフォンで押しにくかったので、ボタンを個別に叩くのではなく
+   「パッドのどこを触っているか」で向きを決める方式にした。
+   中心からの角度で判定するので四隅でも反応し、指を滑らせれば向きが変わる。
+-------------------------------------------------------------------------- */
+(() => {
+  const pad = $('dpad');
+  if (!pad) return;
+  const btns = {};
+  for (const b of pad.querySelectorAll('.dpad__btn')) btns[b.dataset.dir] = b;
+
+  let active = null;      // 押している指の pointerId
+  let current = null;     // いま光らせている向き
+
+  const highlight = dir => {
+    if (current === dir) return;
+    if (current && btns[current]) btns[current].classList.remove('is-on');
+    if (dir && btns[dir]) btns[dir].classList.add('is-on');
+    current = dir;
   };
-  const release = () => btn.classList.remove('is-on');
-  btn.addEventListener('pointerdown', press);
-  btn.addEventListener('pointerup', release);
-  btn.addEventListener('pointerleave', release);
-  btn.addEventListener('pointercancel', release);
-  btn.addEventListener('contextmenu', e => e.preventDefault());
-}
+
+  // パッド中心からの位置で向きを決める。中心の小さな円は無反応
+  function dirAt(clientX, clientY) {
+    const r = pad.getBoundingClientRect();
+    const dx = clientX - (r.left + r.width / 2);
+    const dy = clientY - (r.top + r.height / 2);
+    if (Math.hypot(dx, dy) < r.width * 0.12) return null;
+    return Math.abs(dx) > Math.abs(dy)
+      ? (dx > 0 ? 'right' : 'left')
+      : (dy > 0 ? 'down' : 'up');
+  }
+
+  const apply = e => {
+    const dir = dirAt(e.clientX, e.clientY);
+    if (!dir) return;
+    setDir(dir);
+    highlight(dir);
+  };
+
+  pad.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    active = e.pointerId;
+    pad.setPointerCapture(e.pointerId);
+    apply(e);
+  });
+  pad.addEventListener('pointermove', e => {
+    if (e.pointerId !== active) return;
+    e.preventDefault();
+    apply(e);
+  });
+  const end = e => {
+    if (e.pointerId !== active) return;
+    active = null;
+    highlight(null);
+  };
+  pad.addEventListener('pointerup', end);
+  pad.addEventListener('pointercancel', end);
+  pad.addEventListener('contextmenu', e => e.preventDefault());
+
+  // キーボード / 支援技術から個々のボタンを使う場合の受け口
+  for (const b of pad.querySelectorAll('.dpad__btn')) {
+    b.addEventListener('click', e => {
+      e.preventDefault();
+      setDir(b.dataset.dir);
+    });
+  }
+})();
 
 // スワイプ
 (() => {
@@ -1435,8 +2038,8 @@ async function boot() {
   await loadImages();
 
   IMG['chaser-scared-white'] = makeTinted(IMG['chaser-scared'], '#FFFFFF', 0.72);
-  mazeCanvas = renderMaze(C_WALL);
-  mazeCanvasFlash = renderMaze(token('--color-accent') || '#F7E7A8');
+  newMaze();
+  rebuildMazeArt();
 
   try {
     const saved = localStorage.getItem('piyomaru.diff');

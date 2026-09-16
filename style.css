@@ -446,12 +446,18 @@ body {
   gap: var(--space-md);
 }
 
+/* スマートフォンでも押しやすいよう、パッドを大きくし、
+   十字の腕だけでなく四隅まで当たり判定を広げてある。
+   さらに指を置いたまま滑らせても向きが変わる (game.js 側で処理) */
 .dpad {
   position: relative;
-  width: 148px;
-  height: 148px;
+  width: min(52vw, 212px);
+  height: min(52vw, 212px);
   flex: 0 0 auto;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .dpad__img {
@@ -464,23 +470,25 @@ body {
 
 .dpad__btn {
   position: absolute;
-  width: 31%;
-  height: 31%;
+  width: 44%;
+  height: 44%;
   border: none;
   padding: 0;
   background: transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: transform var(--duration-fast) var(--ease-soft);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--duration-fast) var(--ease-soft);
 }
 
-.dpad__btn:active,
-.dpad__btn.is-on { transform: scale(.88); background: rgba(90, 101, 96, .10); }
+/* 押された向きだけ色が乗る。画像は動かさず、当たり判定も動かさない */
+.dpad__btn.is-on { background: rgba(90, 101, 96, .12); }
 
-.dpad__btn--up    { left: 34.5%; top: 0; }
-.dpad__btn--down  { left: 34.5%; bottom: 0; }
-.dpad__btn--left  { left: 0; top: 34.5%; }
-.dpad__btn--right { right: 0; top: 34.5%; }
+.dpad__btn--up    { left: 28%; top: -4%; }
+.dpad__btn--down  { left: 28%; bottom: -4%; }
+.dpad__btn--left  { left: -4%; top: 28%; }
+.dpad__btn--right { right: -4%; top: 28%; }
 
 .controls__side {
   display: flex;
@@ -521,10 +529,17 @@ body {
   .legend { justify-content: center; max-width: none; }
 }
 
+/* ---------- Narrow phones ---------- */
+/* D-pad を大きく取りたいので、飾りのキャラ一覧は畳む */
+@media (max-width: 480px) {
+  .legend { display: none; }
+  .controls { gap: var(--space-sm); }
+}
+
 /* ---------- Short viewports ---------- */
 
 @media (max-height: 720px) {
-  .dpad { width: 118px; height: 118px; }
+  .dpad { width: min(40vw, 150px); height: min(40vw, 150px); }
   .legend { display: none; }
   .stat__value { font-size: var(--font-size-md); }
 }
